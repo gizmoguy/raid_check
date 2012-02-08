@@ -1,0 +1,9 @@
+Overview
+========
+
+These scripts are for checking the condition of hardware RAIDs on linux servers
+and software RAIDs (MDs) on linux servers with nagios or icinga.
+
+The package is split into two different lots of scripts, those that live on the
+machine to be monitored (found in the client/ directory) and those nagios check
+scripts that live on the monitoring server (found in the server/ directory).
