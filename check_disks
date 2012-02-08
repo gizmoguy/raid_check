@@ -1,0 +1,150 @@
+#!/bin/bash
+#
+# Checks disk health on 3ware RAID controllers and MD RAIDs
+
+# Config options
+TW_BIN="/usr/local/bin/tw_cli"
+TW_OUTPUT_DIR="/tmp/tw_cli"
+
+function check_3ware_drives {
+	# Make sure we have output from 3ware cli and that it's recent
+	if [ -e "$TW_OUTPUT_DIR/info" ]; then
+		if test `find "$TW_OUTPUT_DIR/info" -mmin -30`; then
+			# New controllers let us walk disk status and SMART
+			NEW_CONTROLLERS=`grep -E "^c" "$TW_OUTPUT_DIR/info" | grep -v "9500S" | awk '{print $1}'`
+			for c in $NEW_CONTROLLERS; do
+				# Walk every port on this controller and read the drive data out
+				PORTS=`grep -E "^p" "$TW_OUTPUT_DIR/drivestatus_$c" | grep -v "NOT-PRESENT" | awk '{print $1}'`
+				for p in $PORTS; do
+					RS=`grep "Reallocated Sectors" "$TW_OUTPUT_DIR/drive_${c}_${p}" | awk '{print $5}'`
+					TEMP=`grep "Temperature" "$TW_OUTPUT_DIR/drive_${c}_${p}" | awk '{print $4}'`
+
+					# Any number of reallocated sectors above 1 is bad
+					if [ $RS -ge 3 ]; then
+						if [ -z "$TW_DRIVE_MSG" ]; then
+							TW_DRIVE_MSG="/${c}/${p} has $RS reallocated sectors"
+						else
+							TW_DRIVE_MSG="$TW_DRIVE_MSG, /${c}/${p} has $RS reallocated sectors"
+						fi
+						TW_DRIVE_STATUS=2
+					elif [ $RS -ge 1 ]; then
+						if [ -z "$TW_DRIVE_MSG" ]; then
+							TW_DRIVE_MSG="/${c}/${p} has $RS reallocated sectors"
+						else
+							TW_DRIVE_MSG="$TW_DRIVE_MSG, /${c}/${p} has $RS reallocated sectors"
+						fi
+						if [ $TW_DRIVE_STATUS -lt 1 ]; then
+							TW_DRIVE_STATUS=1
+						fi
+					fi
+
+					# Any temperature above 40 deg C is bad
+					if [ $TEMP -ge 50 ]; then
+						if [ -z "$TW_DRIVE_MSG" ]; then
+							TW_DRIVE_MSG="/${c}/${p} has a temperature of $TEMP deg C"
+						else
+							TW_DRIVE_MSG="$TW_DRIVE_MSG, /${c}/${p} has a temperature of $TEMP deg C"
+						fi
+						TW_DRIVE_STATUS=2
+					elif [ $TEMP -ge 40 ]; then
+						if [ -z "$TW_DRIVE_MSG" ]; then
+							TW_DRIVE_MSG="/${c}/${p} has a temperature of $TEMP deg C"
+						else
+							TW_DRIVE_MSG="$TW_DRIVE_MSG, /${c}/${p} has a temperature of $TEMP deg C"
+						fi
+						if [ $TW_DRIVE_STATUS -lt 1 ]; then
+							TW_DRIVE_STATUS=1
+						fi
+					fi
+				done
+			done
+		else
+			TW_DRIVE_MSG="Stale tw_cli output file"
+			TW_DRIVE_STATUS=2
+		fi
+	else
+		TW_DRIVE_MSG="No output from tw_cli"
+		TW_DRIVE_STATUS=2
+	fi
+}
+
+function check_md_drives {
+	for m in `grep -E "^md" /proc/mdstat | awk '{print $1}'`; do
+		for d in `ls /sys/block/${m}/md/ | grep 'dev-'`; do
+			PART=`echo $d | cut -d "-" -f 2`
+			ERR=`cat /sys/block/${m}/md/${d}/errors`
+
+			if [ $ERR -gt 0 ]; then
+				if [ -z "$MD_MSG" ]; then
+					MD_DRIVE_MSG="$PART on $m has $ERR errors"
+				else
+					MD_DRIVE_MSG="$MD_MSG, $PART on $m has $ERR errors"
+				fi
+				MD_DRIVE_STATUS=2
+			fi
+		done
+	done
+}
+
+# Initialise all variables
+TW_DRIVE_STATUS=0
+TW_DRIVE_MSG=""
+MD_DRIVE_STATUS=0
+MD_DRIVE_MSG=""
+HAS_MD=0
+HAS_TW=0
+
+if [ -e "/proc/mdstat" ]; then
+	# Test MDs
+	HAS_MD=1
+	check_md_drives
+fi
+
+if [ -e "$TW_BIN" ]; then
+	HAS_TW=1
+	check_3ware_drives
+fi
+
+# No output means drives are healthy
+if [ -z "$MD_DRIVE_MSG" -a $MD_DRIVE_STATUS -eq 0 ]; then
+	MD_DRIVE_MSG="MD drives healthy"
+fi
+
+if [ -z "$TW_DRIVE_MSG" -a $TW_DRIVE_STATUS -eq 0 ]; then
+	TW_DRIVE_MSG="3ware drives healthy"
+fi
+
+# We've got MDs present so print the MD message
+if [ $HAS_MD -eq 1 ]; then
+	echo -n $MD_DRIVE_MSG
+fi
+
+# Both MD and 3ware RAIDs present, separate messages with a comma
+if [ $HAS_MD -eq 1 -a $HAS_TW -eq 1 ]; then
+    echo -n ", "
+fi
+
+# We've got 3ware so print the 3ware message
+if [ $HAS_TW -eq 1 ]; then
+    echo -n $TW_DRIVE_MSG
+fi
+
+# Didn't detect any RAID devices
+if [ $HAS_MD -eq 0 -a $HAS_TW -eq 0 ]; then
+    echo -n "No RAID devices to check"
+fi
+
+# Work out what to return
+if [ $MD_DRIVE_STATUS -ge 2 -o $TW_DRIVE_STATUS -ge 2 ]; then
+    # Status CRITICAL
+    echo " : CRITICAL"
+    exit 2
+elif [ $MD_DRIVE_STATUS -eq 1 -o $TW_DRIVE_STATUS -eq 1 ]; then
+    # Status WARNING
+    echo " : WARNING"
+    exit 1
+else
+    # Status OK
+    echo " : OK"
+    exit 0
+fi
