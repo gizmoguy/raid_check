@@ -7,3 +7,82 @@ and software RAIDs (MDs) on linux servers with nagios or icinga.
 The package is split into two different lots of scripts, those that live on the
 machine to be monitored (found in the client/ directory) and those nagios check
 scripts that live on the monitoring server (found in the server/ directory).
+
+Install nagios/icinga monitoring
+========
+
+1. Install RAID monitoring script
+
+    i) If the server has a 3ware hardware RAID controller, install appropriate
+	tw_cli binary to /usr/local/bin/tw_cli
+
+   ii) If the server has a 3ware hardware RAID controller, install tw_cron
+	cronjob to run every 10 mins
+
+	----
+	*/10 *  * * *   root    /usr/local/bin/tw_cron
+	----
+
+  iii) Install check_raid and check_disks in /usr/local/bin
+
+ 2. Install snmpd and extend it to use check_raid and check_disks like so:
+
+	----
+	extend .1.3.6.1.3.2 raid /bin/bash /usr/local/bin/check_raid
+	extend .1.3.6.1.3.3 disks /bin/bash /usr/local/bin/check_disks
+	----
+
+ 3. snmpd will pull in lm-sensors as a dependancy, so after that gets installed
+	configure it with `sudo sensors-detect' (accept default options and select
+	YES when it asks if you want to add modules to /etc/modules), then run
+	/etc/init.d/module-init-tools start to load modules
+
+ 6. Configure the server in icinga to be checked by check_snmp_raid.sh
+
+Install cacti monitoring
+========
+
+ 1. Install the iostat monitoring script
+
+    i) Install the sysstat package with apt-get
+
+   ii) Install iostat_cron in /usr/local/bin and add a cronjob to run every
+	10 minutes:
+
+	----
+	*    *  * * *   root    /usr/local/bin/iostat_cron
+	----
+
+  iii) Install the iostat.pl script in /usr/local/bin
+
+   iv) Modify snmpd.conf to include a pass to iostat.pl like so:
+
+	----
+	pass_persist .1.3.6.1.3.1 /usr/bin/perl /usr/local/bin/iostat.pl
+	----
+
+ 2. Install the smart monitoring script
+
+	i) Install the smart_cron in /usr/local/bin and add a cronjob to run every
+	10 minutes:
+
+	----
+	*/10 *  * * *   root    /usr/local/bin/smart_cron
+	----
+
+	ii) Install smart_snmp to /usr/local/bin
+
+	iii) Modify snmpd.conf to include extends for smart_snmp like so:
+
+	----
+	extend smartrawrealloc /usr/local/bin/smart_snmp R5
+	extend smartdevices    /usr/local/bin/smart_snmp devices
+	extend smartreaderr    /usr/local/bin/smart_snmp 1
+	extend smartrealloc    /usr/local/bin/smart_snmp 5
+	extend smartseekerr    /usr/local/bin/smart_snmp 7
+	extend smartpoweron    /usr/local/bin/smart_snmp 9
+	extend smarthighflywr  /usr/local/bin/smart_snmp 189
+	extend smartairflow    /usr/local/bin/smart_snmp R190
+	extend smarttemp       /usr/local/bin/smart_snmp R194
+	extend smarteccrec     /usr/local/bin/smart_snmp 195
+	----
